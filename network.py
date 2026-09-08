@@ -73,7 +73,20 @@ def leach_elect_clusters(world: WorldSimulation, target_chs: int = 4) -> List[in
 
     ch_names = ", ".join([f"CH-{ch_id:02d}" for ch_id in ch_ids])
     add_log(world, "LEACH ROTATION", f"Round {world.round_num}: New Cluster Heads elected [{ch_names}]. Only CHs transmit to Gateway.")
+
+    try:
+        import firebase_service
+        firebase_service.save_leach_round({
+            "round": world.round_num,
+            "cluster_heads": ch_ids,
+            "sim_minute": world.sim_clock.minute,
+            "timestamp": world.sim_clock.strftime("%Y-%m-%d %H:%M:%S")
+        })
+    except Exception:
+        pass
+
     return ch_ids
+
 
 
 def consume_energy_step(world: WorldSimulation) -> None:
@@ -140,7 +153,20 @@ def find_packet_route(world: WorldSimulation, src_nid: int) -> List[str]:
         if not clean_path or clean_path[-1] != step:
             clean_path.append(step)
 
+    try:
+        import firebase_service
+        firebase_service.save_packet({
+            "sender_node": src.nid,
+            "ch_node": ch_id,
+            "route_path": clean_path,
+            "sim_minute": world.sim_clock.minute,
+            "timestamp": world.sim_clock.strftime("%Y-%m-%d %H:%M:%S")
+        })
+    except Exception:
+        pass
+
     return clean_path
+
 
 
 def compute_network_stats(world: WorldSimulation) -> Dict[str, Any]:

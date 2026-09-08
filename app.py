@@ -407,15 +407,28 @@ with hcol5:
         st.rerun()
 
 with hcol6:
+    fb_status = {"connected": False, "pending_queue_count": 0}
+    try:
+        import firebase_service
+        fb_status = firebase_service.get_firebase_status()
+    except Exception:
+        pass
+
+    if fb_status["connected"]:
+        fb_badge = '<span style="color:#059669; font-weight:800;">Firebase: Connected</span>'
+    else:
+        fb_badge = f'<span style="color:#d97706; font-weight:800;">Firebase: Offline ({fb_status["pending_queue_count"]} Q)</span>'
+
     st.markdown(
         f"""
         <div style="text-align:right; font-size:12px; color:#64748b; font-weight:700;">
-            <div>Round: <b style="color:#0284c7;">{world.round_num}</b> &nbsp;|&nbsp; Nodes: <b style="color:#059669;">12/12</b></div>
+            <div>Round: <b style="color:#0284c7;">{world.round_num}</b> &nbsp;|&nbsp; {fb_badge}</div>
             <div>Gateway: <b style="color:#059669;">Online</b> &nbsp;|&nbsp; Time: <b style="color:#0f172a;">{world.sim_clock.strftime('%H:%M:%S')}</b></div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
 
 st.markdown("<div style='height:2px;'></div>", unsafe_allow_html=True)
 
@@ -1036,7 +1049,7 @@ with bcol2:
 
     st.markdown(
         f"""
-        <div style="font-size:13px; line-height:2.2; padding:4px 0;">
+        <div style="font-size:13px; line-height:2.0; padding:2px 0;">
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Active Nodes:</span><b style="color:#0f172a;">{stats['active_nodes']}</b></div>
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Cluster Heads:</span><b style="color:#9333ea;">{stats['cluster_heads']}</b></div>
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Solar Recharging:</span><b style="color:#0284c7;">{stats['solar_recharging']} Nodes</b></div>
@@ -1047,6 +1060,27 @@ with bcol2:
         """,
         unsafe_allow_html=True,
     )
+
+    from simulation import export_simulation_history_csv, sync_simulation_to_firebase
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("🔥 Sync Firebase", use_container_width=True):
+            synced = sync_simulation_to_firebase(world, force=True)
+            if synced:
+                st.toast("Synced to Cloud Firestore!", icon="✅")
+            else:
+                st.toast("Buffered offline write queue.", icon="ℹ️")
+
+    with btn_col2:
+        csv_data = export_simulation_history_csv(world)
+        st.download_button(
+            label="📥 Export CSV",
+            data=csv_data,
+            file_name=f"environ_x_telemetry_{world.sim_clock.strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
 
 with bcol3:
     st.markdown("<div class='card-hdr'><span>Packet Flow (LoRa Transmission)</span></div>", unsafe_allow_html=True)

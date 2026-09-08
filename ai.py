@@ -287,7 +287,37 @@ def run_multi_node_consensus(world: WorldSimulation) -> Dict[str, Any]:
         "seed_nid": seed_node.nid,
     }
     world.consensus_state = state
+
+    # Sync consensus & event to Firebase
+    try:
+        import firebase_service
+        firebase_service.save_consensus({
+            "seed_node": seed_node.name,
+            "seed_nid": seed_node.nid,
+            "hazard": detected_hazard,
+            "agree_count": agree_count,
+            "total_nodes": total_neighbors,
+            "confirmed": confirmed,
+            "status": status_text,
+            "sim_minute": world.sim_clock.minute,
+            "timestamp": world.sim_clock.strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+        if confirmed:
+            firebase_service.save_event({
+                "type": f"{detected_hazard.upper()}_ALERT",
+                "hazard": detected_hazard,
+                "origin_node": seed_node.name,
+                "origin_nid": seed_node.nid,
+                "confidence": round(seed_node.edge_ai.get("confidence", 0.92) * 100, 1),
+                "sim_minute": world.sim_clock.minute,
+                "timestamp": world.sim_clock.strftime("%Y-%m-%d %H:%M:%S")
+            })
+    except Exception:
+        pass
+
     return state
+
 
 
 

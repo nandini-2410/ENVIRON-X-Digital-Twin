@@ -14,3 +14,10 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Firebase & Secrets
+firebase_service_account.json
+.streamlit/secrets.toml
+.env
+*.json.secret
+

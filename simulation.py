@@ -116,6 +116,8 @@ class WorldSimulation:
     packet_flow_state: List[Dict[str, Any]] = field(default_factory=list)
     gateway_status: Dict[str, Any] = field(default_factory=dict)
     rng: random.Random = field(default_factory=lambda: random.Random(42))
+    _last_firebase_saved_minute: int = -1
+
 
     def get_node(self, nid: int) -> Node:
         for n in self.nodes:
@@ -441,3 +443,106 @@ def update_sensors_step(world: WorldSimulation) -> None:
         n.history["smoke"] = (n.history.get("smoke", []) + [s.smoke])[-30:]
         n.history["water"] = (n.history.get("water", []) + [s.water_level])[-30:]
         n.history["motion"] = (n.history.get("motion", []) + [s.motion])[-30:]
+
+    # Deduplicated minute check for Firebase saving
+    sync_simulation_to_firebase(world)
+
+
+def sync_simulation_to_firebase(world: WorldSimulation, force: bool = False) -> bool:
+    """
+    Saves sensor telemetry for all 12 nodes once per simulated minute (or when force=True).
+    Prevents duplicate writes on Streamlit UI reruns.
+    """
+    current_minute = world.sim_clock.minute
+    if not force and world._last_firebase_saved_minute == current_minute:
+        return False
+
+    world._last_firebase_saved_minute = current_minute
+    
+    try:
+        import firebase_service
+
+        readings = []
+        node_states = []
+        now_iso = datetime.utcnow().isoformat()
+        sim_time_str = world.sim_clock.strftime("%H:%M:%S")
+
+        for n in world.nodes:
+            s = n.sensors
+            hazard = "NORMAL"
+            if isinstance(n.edge_ai, dict):
+                hazard = n.edge_ai.get("primary_hazard", "NORMAL")
+
+            readings.append({
+                "node_id": n.nid,
+                "node_name": n.name,
+                "zone": n.zone,
+                "temperature": round(s.temperature, 2),
+                "humidity": round(s.humidity, 2),
+                "gas": round(s.gas, 2),
+                "smoke": round(s.smoke, 2),
+                "water_level": round(s.water_level, 2),
+                "motion": round(s.motion, 2),
+                "tilt": round(s.tilt, 2),
+                "vibration": round(s.vibration, 2),
+                "solar_irradiance": round(s.solar_irradiance, 2),
+                "battery": round(n.battery, 2),
+                "sim_minute": current_minute,
+                "sim_time": sim_time_str,
+                "hazard_type": hazard,
+                "timestamp": now_iso
+            })
+
+            node_states.append({
+                "id": n.nid,
+                "name": n.name,
+                "zone": n.zone,
+                "lat": n.lat,
+                "lng": n.lon,
+                "role": n.role,
+                "is_ch": n.is_ch,
+                "battery": round(n.battery, 2),
+                "status": n.status,
+                "last_seen": sim_time_str,
+                "updated_at": now_iso
+            })
+
+        firebase_service.save_sensor_reading(readings)
+        firebase_service.save_node_state(node_states)
+        firebase_service.flush_offline_queue()
+        return True
+    except Exception as e:
+        import logging
+        logging.getLogger("simulation").warning(f"Error syncing to Firebase: {e}")
+        return False
+
+
+def export_simulation_history_csv(world: WorldSimulation) -> str:
+    """
+    Generates a CSV string representation of all node current telemetry & history.
+    """
+    import io
+    import csv
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header
+    writer.writerow([
+        "Sim_Time", "Node_ID", "Node_Name", "Zone", "Status", "Battery_Pct",
+        "Temperature_C", "Humidity_Pct", "Gas_PPM", "Smoke_PPM",
+        "Water_Level_M", "Motion_G", "Tilt_Deg", "Vibration_G", "Solar_W_m2"
+    ])
+
+    sim_time_str = world.sim_clock.strftime("%H:%M:%S")
+    for n in world.nodes:
+        s = n.sensors
+        writer.writerow([
+            sim_time_str, n.nid, n.name, n.zone, n.status, round(n.battery, 1),
+            round(s.temperature, 1), round(s.humidity, 1), round(s.gas, 1), round(s.smoke, 1),
+            round(s.water_level, 2), round(s.motion, 2), round(s.tilt, 2), round(s.vibration, 2),
+            round(s.solar_irradiance, 0)
+        ])
+
+    return output.getvalue()
+
