@@ -5,5 +5,5 @@
   "fqbn": "esp32:esp32:esp32",
   "hardwareFolders": "C:\\Users\\Rachit\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.7,C:\\Users\\Rachit\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.7",
   "otherLibrariesFolders": "C:\\Users\\Rachit\\Documents\\Arduino\\libraries",
-  "sketchLocation": "C:\\Users\\Rachit\\Documents\\ENVIRON-X\\firmware\\esp32_node1_pm25"
+  "sketchLocation": "C:\\Users\\Rachit\\Documents\\ENVIRON-X\\ENVIRON-X-Digital-Twin\\firmware\\esp32_node1_pm25"
 }
