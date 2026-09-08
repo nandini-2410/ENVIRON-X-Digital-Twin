@@ -37,6 +37,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+    st_autorefresh(interval=3000, key="hw_telemetry_refresher")
+except Exception:
+    pass
+
 # -----------------------------------------------------------------------------
 # CUSTOM LIGHT ENGINEERING THEME CSS
 # -----------------------------------------------------------------------------
@@ -181,6 +187,110 @@ st.markdown(
 
 
 # -----------------------------------------------------------------------------
+# HARDWARE WIRELESS WI-FI & USB SERIAL TELEMETRY BRIDGE
+# -----------------------------------------------------------------------------
+import threading
+import re
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+try:
+    import serial
+    import json
+except ImportError:
+    serial = None
+
+# Global thread-safe cache for hardware telemetry
+HARDWARE_TELEMETRY_CACHE = {}
+
+def get_local_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+LOCAL_IP = get_local_ip()
+
+class TelemetryHTTPHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path in ["/api/telemetry", "/"]:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode('utf-8'))
+                src_id = int(data.get("src_node", 1))
+                HARDWARE_TELEMETRY_CACHE[src_id] = {
+                    "battery": float(data.get("battery_pct", 95.0)),
+                    "temperature": float(data.get("temperature_c", 28.5)),
+                    "air_quality_pm25": float(data.get("pm25_ugm3", 15.0)),
+                    "water_level": float(data.get("water_level_cm", 0.0)),
+                    "status": "HARDWARE LIVE (WIFI) 🟢",
+                    "role": data.get("role", "Hardware Cluster Head 👑"),
+                    "risk_score": float(data.get("risk_score", 0.05)),
+                    "last_seen": time.time()
+                }
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+                return
+            except Exception:
+                pass
+        self.send_response(400)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+def _background_wifi_server_worker():
+    try:
+        server = HTTPServer(('0.0.0.0', 8080), TelemetryHTTPHandler)
+        server.serve_forever()
+    except Exception:
+        pass
+
+def _background_hardware_worker():
+    # Serial COM port polling disabled to ensure COM3/COM4 are 100% unlocked for Arduino IDE flashing.
+    # Telemetry is received wirelessly over Wi-Fi HTTP POST (Port 8080).
+    pass
+
+# Start background threads once
+if "hw_thread_started" not in st.session_state:
+    st.session_state.hw_thread_started = True
+    wifi_thread = threading.Thread(target=_background_wifi_server_worker, daemon=True)
+    wifi_thread.start()
+    hw_thread = threading.Thread(target=_background_hardware_worker, daemon=True)
+    hw_thread.start()
+
+def apply_hardware_telemetry(world: WorldSimulation):
+    now = time.time()
+    for node in world.nodes:
+        node.is_hardware = False
+
+    for src_id, data in list(HARDWARE_TELEMETRY_CACHE.items()):
+        if now - data.get("last_seen", 0) < 15.0:  # Active within last 15s
+            node = world.get_node(src_id)
+            if node:
+                node.is_hardware = True
+                if "battery" in data: node.battery = data["battery"]
+                if "water_level" in data: node.sensors.water_level = data["water_level"]
+                if "temperature" in data: node.sensors.temperature = data["temperature"]
+                if "air_quality_pm25" in data: node.sensors.air_quality_pm25 = data["air_quality_pm25"]
+                node.status = "⚡ HARDWARE LIVE (WiFi)"
+                if "role" in data:
+                    role_str = str(data["role"])
+                    if "CH" in role_str:
+                        node.role = "Hardware Cluster Head 👑"
+                        node.is_ch = True
+                    else:
+                        node.role = "Hardware Member"
+                        node.is_ch = False
+
+# -----------------------------------------------------------------------------
 # INITIALIZE SESSION STATE
 # -----------------------------------------------------------------------------
 def get_world() -> WorldSimulation:
@@ -201,6 +311,8 @@ if world.running:
     consume_energy_step(world)
     run_multi_node_consensus(world)
 
+apply_hardware_telemetry(world)
+
 # -----------------------------------------------------------------------------
 # TOP HEADER BAR
 # -----------------------------------------------------------------------------
@@ -219,17 +331,21 @@ hcol1, hcol2, hcol3, hcol4, hcol5, hcol6 = st.columns([2.6, 1.4, 0.8, 0.8, 1.0, 
 
 with hcol1:
     st.markdown(
-        """
-        <div style="display:flex; align-items:center; gap:10px;">
+        f"""
+        <div style="display:flex; align-items:center; gap:8px;">
             <div>
-                <div style="font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif; font-size: 30px; font-weight: 900; color: #0f172a; line-height: 1.0; letter-spacing: 1.5px;">
+                <div style="font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif; font-size: 28px; font-weight: 900; color: #0f172a; line-height: 1.0; letter-spacing: 1.5px;">
                     ENVIRON<span style="color:#0284c7;">-X</span>
                 </div>
-                <div style="font-family: 'Inter', sans-serif; font-size: 11px; color: #059669; font-weight: 800; letter-spacing: 0.8px; margin-top: 2px;">
+                <div style="font-family: 'Inter', sans-serif; font-size: 10.5px; color: #059669; font-weight: 800; letter-spacing: 0.8px; margin-top: 2px;">
                     ENVIRONMENTAL INTELLIGENCE NETWORK
                 </div>
             </div>
-            <div style="margin-left:12px;" class="hdr-badge">SYSTEM ONLINE</div>
+            <div class="hdr-badge">SYSTEM ONLINE</div>
+            {f'<div style="font-size:10px; background:#ecfdf5; border:1px solid #6ee7b7; color:#047857; padding:3px 8px; border-radius:4px; font-weight:800;">⚡ PHYSICAL HARDWARE ONLINE ({sum(1 for n in world.nodes if getattr(n, "is_hardware", False))})</div>' if any(getattr(n, "is_hardware", False) for n in world.nodes) else '<div style="font-size:10px; background:#f8fafc; border:1px solid #cbd5e1; color:#64748b; padding:3px 7px; border-radius:4px; font-weight:700;">⚙️ SIMULATION MODE</div>'}
+            <div style="font-size:10px; background:#f0f9ff; border:1px solid #bae6fd; color:#0284c7; padding:3px 7px; border-radius:4px; font-weight:700;">
+                📶 Wi-Fi: http://{LOCAL_IP}:8080/api/telemetry
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -258,6 +374,10 @@ with hcol2:
             world.selected_node_id = 8  # N08 in Industrial Gas Zone
         elif selected_scen == "LANDSLIDE":
             world.selected_node_id = 9  # N09 in Hilly Slope Zone
+
+        scen_node = world.get_node(world.selected_node_id)
+        if scen_node:
+            st.session_state["node_select_box"] = scen_node.name
 
         if selected_scen == "SENSOR FAILURE":
             world.get_node(7).failed = True
@@ -360,7 +480,7 @@ with col_map:
             s4_l, s4_v = "Soil Saturation", fmt["soil"]
         else:
             s1_l, s1_v = "Temperature", fmt["temp"]
-            s2_l, s2_v = "Humidity", fmt["humidity"]
+            s2_l, s2_v = "PM2.5 Dust", fmt["pm25"]
             s3_l, s3_v = "Gas (VOC)", fmt["gas"]
             s4_l, s4_v = "Smoke / CO2", fmt["smoke"]
 
@@ -650,15 +770,27 @@ with col_map:
 with col_node:
     st.markdown("<div class='card-hdr'><span>Node Information</span></div>", unsafe_allow_html=True)
 
-    node_names = [n.name for n in world.nodes]
+    node_options = [
+        f"{n.name} ⚡ (PHYSICAL HARDWARE ONLINE)" if getattr(n, "is_hardware", False) else f"{n.name} (Simulated Fallback)"
+        for n in world.nodes
+    ]
+    
+    # Auto-select hardware node if online and user hasn't selected another
+    hw_nodes = [n for n in world.nodes if getattr(n, "is_hardware", False)]
+    if "node_select_box" not in st.session_state or st.session_state["node_select_box"] not in node_options:
+        if hw_nodes:
+            st.session_state["node_select_box"] = f"{hw_nodes[0].name} ⚡ (PHYSICAL HARDWARE ONLINE)"
+        else:
+            st.session_state["node_select_box"] = node_options[0]
+
     selected_name = st.selectbox(
         "Select Node to Inspect",
-        options=node_names,
-        index=world.selected_node_id - 1,
+        options=node_options,
         key="node_select_box",
     )
     try:
-        nid = int(selected_name.split("-")[0].replace("N", "").strip())
+        raw_prefix = selected_name.split(" ")[0].split("-")[0]
+        nid = int(raw_prefix.replace("N", "").strip())
     except Exception:
         nid = world.selected_node_id
     sel_node = world.get_node(nid)
@@ -670,46 +802,47 @@ with col_node:
     status_bg = "#0284c7" if sel_node.solar_recharging else ("#dc2626" if "CRITICAL" in sel_node.status else ("#d97706" if "Anomaly" in sel_node.status else "#059669"))
     zone_cls = "zone-badge-river" if "River" in sel_node.zone else ("zone-badge-slope" if "Hilly" in sel_node.zone else "zone-badge-forest")
 
+    is_hw = getattr(sel_node, "is_hardware", False)
+    if is_hw:
+        hw_banner = """<div style="background:#ecfdf5; border:1px solid #6ee7b7; color:#047857; font-size:12px; font-weight:800; padding:6px 10px; border-radius:6px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;"><span>⚡ PHYSICAL HARDWARE NODE (ESP32)</span><span style="font-size:10.5px; background:#10b981; color:white; padding:2px 7px; border-radius:4px; font-weight:800;">LIVE WI-FI / LORA</span></div>"""
+    else:
+        hw_banner = """<div style="background:#f8fafc; border:1px solid #cbd5e1; color:#64748b; font-size:11.5px; font-weight:700; padding:5px 10px; border-radius:6px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;"><span>⚙️ SIMULATED FALLBACK NODE</span><span style="font-size:10px; background:#e2e8f0; color:#475569; padding:2px 6px; border-radius:4px; font-weight:700;">DIGITAL TWIN ENGINE</span></div>"""
+
     st.markdown(
-        f"""
-        <div style="background:#ffffff; padding:12px; border-radius:6px; border:1px solid #e2e8f0; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                    <b style="font-size:17px; color:#0f172a;">{sel_node.name}</b>
-                    &nbsp;<span class="{zone_cls}">{sel_node.zone}</span>
-                </div>
-                <span style="background:{status_bg}; color:#fff; font-size:11px; font-weight:800; padding:2px 8px; border-radius:10px;">
-                    {sel_node.status}
-                </span>
-            </div>
-            <div style="font-size:12px; color:#64748b; margin-top:5px;">
-                Role: <b style="color:#0284c7;">{'Cluster Head (GW Connected)' if sel_node.is_ch else 'Cluster Member (CH-0' + str(sel_node.cluster_id) + ')'}</b>
-                &nbsp;|&nbsp; Elev: <b style="color:#0f172a;">{sel_node.elevation}</b>
-            </div>
-            <div style="font-size:11.5px; color:#64748b; margin-top:3px;">
-                Sensors: {', '.join(sel_node.sensor_suite)}
-            </div>
-            <div style="margin-top:8px;">
-                <div style="display:flex; justify-content:space-between; font-size:12px; color:#64748b; font-weight:600;">
-                    <span>Battery Level</span><b style="color:{batt_color};">{int(sel_node.battery)}% {'(Solar)' if sel_node.solar_recharging else ''}</b>
-                </div>
-                <div style="width:100%; height:7px; background:#e2e8f0; border-radius:4px; overflow:hidden; margin-top:3px;">
-                    <div style="width:{int(sel_node.battery)}%; height:100%; background:{batt_color}; border-radius:4px;"></div>
-                </div>
-            </div>
-        </div>
-        """,
+        f"""<div style="background:#ffffff; padding:12px; border-radius:6px; border:1px solid #e2e8f0; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+{hw_banner}
+<div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+<div><b style="font-size:17px; color:#0f172a;">{sel_node.name}</b> &nbsp;<span class="{zone_cls}">{sel_node.zone}</span></div>
+<span style="background:{status_bg}; color:#fff; font-size:11px; font-weight:800; padding:2px 8px; border-radius:10px;">{sel_node.status}</span>
+</div>
+<div style="font-size:12px; color:#64748b; margin-top:5px;">Role: <b style="color:#0284c7;">{'Cluster Head (GW Connected)' if sel_node.is_ch else 'Cluster Member (CH-0' + str(sel_node.cluster_id) + ')'}</b> &nbsp;|&nbsp; Elev: <b style="color:#0f172a;">{sel_node.elevation}</b></div>
+<div style="font-size:11.5px; color:#64748b; margin-top:3px;">Sensors: {', '.join(sel_node.sensor_suite)}</div>
+<div style="margin-top:8px;">
+<div style="display:flex; justify-content:space-between; font-size:12px; color:#64748b; font-weight:600;"><span>Battery Level</span><b style="color:{batt_color};">{int(sel_node.battery)}% {'(Solar)' if sel_node.solar_recharging else ''}</b></div>
+<div style="width:100%; height:7px; background:#e2e8f0; border-radius:4px; overflow:hidden; margin-top:3px;"><div style="width:{int(sel_node.battery)}%; height:100%; background:{batt_color}; border-radius:4px;"></div></div>
+</div>
+</div>""",
         unsafe_allow_html=True,
     )
 
     fmt = sel_node.get_formatted_sensors()
     s = sel_node.sensors
-    if sel_node.zone == "River / Floody Zone":
+    pm_val_num = getattr(s, "air_quality_pm25", 18.5)
+    if is_hw:
+        wl_display_cm = s.water_level * 100.0 if s.water_level < 2.0 else s.water_level
+        readings = [
+            ("Water Level (Physical)", f"{wl_display_cm:.1f} cm", "↑" if wl_display_cm > 15.0 else "ok"),
+            ("Temperature (Physical)", fmt["temp"], "↑" if s.temperature > 35 else "ok"),
+            ("Air Quality PM2.5 (Physical)", fmt["pm25"], "↑" if pm_val_num > 35 else "ok"),
+            ("Battery Level (Physical)", f"{int(sel_node.battery)} %", "dn" if sel_node.battery < 25 else "ok"),
+            ("Hazard Risk Score", f"{getattr(sel_node, 'risk_score', 0.05):.2f}", "↑" if getattr(sel_node, 'risk_score', 0.05) > 0.5 else "ok"),
+        ]
+    elif sel_node.zone == "River / Floody Zone":
         readings = [
             ("Water Level", fmt["water"], "↑" if s.water_level > 1.4 else "ok"),
             ("River Flow Rate", fmt["flow"], "↑" if s.flow_rate > 2.5 else "ok"),
             ("Soil Moisture", fmt["soil"], "↑" if s.soil_moisture > 75 else "ok"),
-            ("Humidity", fmt["humidity"], "↑" if s.humidity > 85 else "ok"),
+            ("Air Quality (PM2.5)", fmt["pm25"], "↑" if pm_val_num > 35 else "ok"),
             ("Solar Irradiance", fmt["solar"], "ok"),
         ]
     elif sel_node.zone == "Hilly Slope Zone":
@@ -717,13 +850,13 @@ with col_node:
             ("3-Axis Tilt", fmt["tilt"], "↑" if s.tilt > 2.5 else "ok"),
             ("Ground Vibration", fmt["vibration"], "↑" if s.vibration > 1.8 else "ok"),
             ("IMU Motion", fmt["motion"], "↑" if s.motion > 1.2 else "ok"),
-            ("Soil Saturation", fmt["soil"], "↑" if s.soil_moisture > 65 else "ok"),
+            ("Air Quality (PM2.5)", fmt["pm25"], "↑" if pm_val_num > 35 else "ok"),
             ("Solar Irradiance", fmt["solar"], "ok"),
         ]
     else:  # Forest Zone
         readings = [
             ("Temperature", fmt["temp"], "↑" if s.temperature > 32 else "ok"),
-            ("Humidity", fmt["humidity"], "↓" if s.humidity < 40 else "ok"),
+            ("Air Quality (PM2.5)", fmt["pm25"], "↑" if pm_val_num > 35 else "ok"),
             ("Smoke / CO2", fmt["smoke"], "↑" if s.smoke > 30 else "ok"),
             ("Gas (VOC)", fmt["gas"], "↑" if s.gas > 150 else "ok"),
             ("Solar Irradiance", fmt["solar"], "ok"),

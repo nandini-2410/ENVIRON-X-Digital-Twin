@@ -177,7 +177,9 @@ def run_multi_node_consensus(world: WorldSimulation) -> Dict[str, Any]:
 
     # Enforce strict single red epicenter status & neighbor statuses
     for n in world.nodes:
-        if n.failed:
+        if getattr(n, "is_hardware", False):
+            continue
+        elif n.failed:
             n.status = "Offline (Fault)"
         elif n.nid == seed_node.nid:
             n.status = f"CRITICAL HAZARD ({world.scenario})"

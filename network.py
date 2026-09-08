@@ -82,7 +82,7 @@ def consume_energy_step(world: WorldSimulation) -> None:
     low_ch_name = ""
 
     for n in world.nodes:
-        if n.failed:
+        if getattr(n, "is_hardware", False) or n.failed:
             continue
 
         if world.scenario == "LOW BATTERY":

@@ -46,6 +46,7 @@ class Sensors:
     tilt: float = 0.2
     vibration: float = 0.1
     solar_irradiance: float = 850.0  # W/m^2 Solar Power
+    air_quality_pm25: float = 18.5  # ug/m3 PM2.5 Dust Concentration
 
 
 @dataclass
@@ -73,10 +74,12 @@ class Node:
     history: Dict[str, List[float]] = field(default_factory=dict)
     edge_ai: Dict[str, Any] = field(default_factory=dict)
     last_seen: int = 0
+    is_hardware: bool = False
 
     def get_formatted_sensors(self) -> Dict[str, str]:
         """Returns single synchronized string dictionary for both map hover card & node info table."""
         s = self.sensors
+        pm_val = getattr(s, "air_quality_pm25", 18.5)
         return {
             "temp": f"{s.temperature:.1f} °C",
             "humidity": f"{s.humidity:.0f} %",
@@ -90,6 +93,7 @@ class Node:
             "tilt": f"{s.tilt:.2f} °",
             "vibration": f"{s.vibration:.2f} g",
             "solar": f"{s.solar_irradiance:.0f} W/m²",
+            "pm25": f"{pm_val:.1f} µg/m³",
         }
 
 
@@ -339,6 +343,17 @@ def update_sensors_step(world: WorldSimulation) -> None:
     epic_lat, epic_lon = get_epicenter(world.scenario)
 
     for n in world.nodes:
+        if getattr(n, "is_hardware", False):
+            # Record current hardware telemetry into node history for charts without drift
+            for sname, sval in [("water_level", n.sensors.water_level),
+                                ("temperature", n.sensors.temperature),
+                                ("air_quality_pm25", n.sensors.air_quality_pm25),
+                                ("battery", n.battery)]:
+                if sname not in n.history: n.history[sname] = []
+                n.history[sname].append(sval)
+                if len(n.history[sname]) > 30: n.history[sname].pop(0)
+            continue
+
         if n.failed and world.scenario == "SENSOR FAILURE" and n.nid == 7:
             continue
 
@@ -355,6 +370,7 @@ def update_sensors_step(world: WorldSimulation) -> None:
             target_flow = 0.85 + (n.nid % 2) * 0.05
             target_gas = 65.0
             target_smoke = 8.0
+            target_pm25 = 14.0 + (n.nid % 3) * 1.5
             target_motion = 0.05
             target_tilt = 0.1
             target_vib = 0.04
@@ -365,6 +381,7 @@ def update_sensors_step(world: WorldSimulation) -> None:
             target_flow = 0.10
             target_gas = 70.0
             target_smoke = 10.0
+            target_pm25 = 22.0 + (n.nid % 3) * 2.0
             target_motion = 0.18 + (n.nid % 2) * 0.03
             target_tilt = 0.45 + (n.nid % 2) * 0.04
             target_vib = 0.12 + (n.nid % 2) * 0.03
@@ -373,6 +390,7 @@ def update_sensors_step(world: WorldSimulation) -> None:
             target_hum = 62.0 - (n.nid % 4) * 1.0
             target_gas = 85.0 + (n.nid % 5) * 4.0
             target_smoke = 12.0 + (n.nid % 2) * 2.0
+            target_pm25 = 18.0 + (n.nid % 4) * 2.5
             target_water = 0.25
             target_flow = 0.20
             target_motion = 0.08
@@ -384,6 +402,7 @@ def update_sensors_step(world: WorldSimulation) -> None:
             target_temp += 26.0 * spatial_weight
             target_smoke += 360.0 * spatial_weight
             target_gas += 290.0 * spatial_weight
+            target_pm25 += 240.0 * spatial_weight
             target_hum -= 42.0 * spatial_weight
         elif world.scenario == "FLOOD":
             target_water += 3.8 * spatial_weight
@@ -393,6 +412,7 @@ def update_sensors_step(world: WorldSimulation) -> None:
         elif world.scenario == "GAS LEAK":
             target_gas += 430.0 * spatial_weight
             target_smoke += 65.0 * spatial_weight
+            target_pm25 += 180.0 * spatial_weight
         elif world.scenario == "LANDSLIDE":
             target_motion += 4.2 * spatial_weight
             target_tilt += 9.2 * spatial_weight
@@ -407,6 +427,7 @@ def update_sensors_step(world: WorldSimulation) -> None:
         s.humidity = clamp(step_sensor_value(s.humidity, target_hum, 0.8, rng), 10.0, 99.0)
         s.gas = clamp(step_sensor_value(s.gas, target_gas, 3.0, rng), 20.0, 600.0)
         s.smoke = clamp(step_sensor_value(s.smoke, target_smoke, 1.5, rng), 0.0, 500.0)
+        s.air_quality_pm25 = clamp(step_sensor_value(getattr(s, "air_quality_pm25", 18.5), target_pm25, 1.5, rng), 5.0, 500.0)
         s.water_level = clamp(step_sensor_value(s.water_level, target_water, 0.04, rng), 0.0, 5.0)
         s.flow_rate = clamp(step_sensor_value(s.flow_rate, target_flow, 0.05, rng), 0.0, 8.0)
         s.motion = clamp(step_sensor_value(s.motion, target_motion, 0.04, rng), 0.0, 6.0)
